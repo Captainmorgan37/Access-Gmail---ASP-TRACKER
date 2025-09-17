@@ -1,6 +1,6 @@
-import os
+import imaplib
+import email
 from datetime import datetime, timedelta, timezone
-
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -11,25 +11,67 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(page_title="Aircraft Presence (McCall/Palmer)", layout="wide")
 st.title("Aircraft Presence — McCall & Palmer")
 
-DATA_PATH = "./csv_reports/latest_report.csv"
-
-# Auto-refresh every 60s (adjust as needed)
+# Auto-refresh every 60s
 st_autorefresh(interval=60 * 1000, key="gpsfeedrefresh")
+
+# Load credentials from secrets
+EMAIL_ACCOUNT = st.secrets["EMAIL_ACCOUNT"]
+EMAIL_PASSWORD = st.secrets["EMAIL_PASSWORD"]
+IMAP_SERVER = st.secrets.get("IMAP_SERVER", "imap.gmail.com")
+
+SENDER = "no-reply@telematics.guru"
+SUBJECT = "ASP TRACKING EMAIL"
+FILENAME = "IOCCReport-2ndIteration.csv"
 
 # ----------------------------
 # Helpers
 # ----------------------------
-def load_csv(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        st.error(f"CSV not found at `{path}`. Make sure your email fetcher wrote the file.")
-        return pd.DataFrame(columns=["Name", "Last Seen UTC", "Last Location"])
+def fetch_latest_csv() -> pd.DataFrame:
+    """Fetch the latest CSV attachment from Gmail and return as DataFrame"""
+    try:
+        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+        mail.login(EMAIL_ACCOUNT, EMAIL_PASSWORD)
+        mail.select("inbox")
 
-    df = pd.read_csv(path)
+        # Search by sender + subject
+        status, messages = mail.search(
+            None, f'(FROM "{SENDER}" SUBJECT "{SUBJECT}")'
+        )
 
-    # Normalize column names
+        if status != "OK" or not messages[0]:
+            st.warning("No matching emails found.")
+            return pd.DataFrame()
+
+        latest_id = messages[0].split()[-1]
+        status, msg_data = mail.fetch(latest_id, "(RFC822)")
+        msg = email.message_from_bytes(msg_data[0][1])
+
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if part.get("Content-Disposition") is None:
+                continue
+            filename = part.get_filename()
+            if filename and filename == FILENAME:
+                payload = part.get_payload(decode=True)
+                df = pd.read_csv(pd.io.common.BytesIO(payload))
+                return df
+
+        st.error("CSV attachment not found in latest email.")
+        return pd.DataFrame()
+
+    except Exception as e:
+        st.error(f"Error fetching email: {e}")
+        return pd.DataFrame()
+
+
+def parse_df(df: pd.DataFrame):
+    """Parse timestamps and clean columns"""
+    if df.empty:
+        return df
+
     df.columns = [c.strip() for c in df.columns]
 
-    # Parse datetime
     def try_parse(ts: str):
         ts = str(ts).strip()
         for fmt in ("%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M", "%Y-%m-%d %H:%M", "%m/%d/%Y %H:%M"):
@@ -44,7 +86,6 @@ def load_csv(path: str) -> pd.DataFrame:
 
     df["Last Seen UTC"] = df["Last Seen UTC"].apply(try_parse)
     df["Last Location"] = df["Last Location"].astype(str).str.strip()
-
     return df
 
 
@@ -73,14 +114,12 @@ def render_location_block(location: str, current_df: pd.DataFrame, recent_df: pd
     c1.metric("Current (≤15m)", len(curr_loc))
     c2.metric("Recent (≤24h, not current)", len(rec_loc))
 
-    # Current list (no timestamps)
     if len(curr_loc):
         st.markdown("**Current Location**")
         st.write("\n".join(f"• {row['Name']}" for _, row in curr_loc.sort_values("Name").iterrows()))
     else:
         st.caption("No aircraft currently in window.")
 
-    # Recent list (with timestamps)
     if len(rec_loc):
         st.markdown("**Seen in Last 24h**")
         table = rec_loc[["Name", "Last Seen UTC"]].sort_values("Last Seen UTC", ascending=False)
@@ -92,7 +131,8 @@ def render_location_block(location: str, current_df: pd.DataFrame, recent_df: pd
 # ----------------------------
 # Main
 # ----------------------------
-df = load_csv(DATA_PATH)
+df = fetch_latest_csv()
+df = parse_df(df)
 
 if df.empty:
     st.stop()
@@ -102,12 +142,12 @@ current_df, recent_df, now_utc = split_status(df)
 st.caption(f"Last refresh (UTC): **{now_utc.strftime('%Y-%m-%d %H:%M:%S')}**")
 st.divider()
 
-# Show McCall & Palmer first
+# McCall & Palmer first
 for site in ["McCall", "Palmer Hangar", "Palmer"]:
     if site in set(df["Last Location"]):
         render_location_block(site, current_df, recent_df)
 
-# Show any other locations
+# Other locations
 other_sites = sorted(set(df["Last Location"]) - {"McCall", "Palmer Hangar", "Palmer"})
 if other_sites:
     st.divider()
