@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
+from zoneinfo import ZoneInfo
 
 # ----------------------------
 # Config
@@ -22,6 +23,10 @@ IMAP_SERVER = st.secrets.get("IMAP_SERVER", "imap.gmail.com")
 SENDER = "no-reply@telematics.guru"
 SUBJECT = "ASP TRACKING EMAIL"
 FILENAME = "IOCCReport-2ndIteration.csv"
+
+# Local timezone (Mountain Time)
+LOCAL_TZ = ZoneInfo("America/Edmonton")
+
 
 # ----------------------------
 # Helpers
@@ -66,37 +71,47 @@ def fetch_latest_csv() -> pd.DataFrame:
 
 
 def parse_df(df: pd.DataFrame):
-    """Parse timestamps and clean columns"""
+    """Parse timestamps as local Mountain Time and clean columns"""
     if df.empty:
         return df
 
     df.columns = [c.strip() for c in df.columns]
 
-    def try_parse(ts: str):
+    if "Last Seen UTC" in df.columns:
+        df.rename(columns={"Last Seen UTC": "Last Seen (MT)"}, inplace=True)
+
+    def parse_local(ts: str):
         ts = str(ts).strip()
         for fmt in ("%d/%m/%Y %H:%M", "%d-%m-%Y %H:%M", "%Y-%m-%d %H:%M", "%m/%d/%Y %H:%M"):
             try:
-                return datetime.strptime(ts, fmt).replace(tzinfo=timezone.utc)
+                return datetime.strptime(ts, fmt).replace(tzinfo=LOCAL_TZ)
             except Exception:
                 continue
         try:
-            return pd.to_datetime(ts, utc=True).to_pydatetime()
+            dt = pd.to_datetime(ts, errors="coerce")
+            if pd.isna(dt):
+                return pd.NaT
+            if dt.tzinfo is None:
+                return dt.to_pydatetime().replace(tzinfo=LOCAL_TZ)
+            return dt.to_pydatetime().astimezone(LOCAL_TZ)
         except Exception:
             return pd.NaT
 
-    df["Last Seen UTC"] = df["Last Seen UTC"].apply(try_parse)
+    df["Last Seen (MT)"] = df["Last Seen (MT)"].apply(parse_local)
     df["Last Location"] = df["Last Location"].astype(str).str.strip()
     return df
 
 
 def split_status(df: pd.DataFrame, current_window_min: int = 15, recent_window_hr: int = 24):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(LOCAL_TZ)
     current_delta = timedelta(minutes=current_window_min)
     recent_delta = timedelta(hours=recent_window_hr)
 
     df = df.copy()
-    df["is_current"] = (now - df["Last Seen UTC"]) <= current_delta
-    df["is_recent"] = (now - df["Last Seen UTC"]) <= recent_delta
+    seen = df["Last Seen (MT)"]
+
+    df["is_current"] = (now - seen) <= current_delta
+    df["is_recent"] = (now - seen) <= recent_delta
 
     current_df = df[df["is_current"]].copy()
     recent_df = df[(df["is_recent"]) & (~df["is_current"])].copy()
@@ -114,15 +129,19 @@ def render_location_block(location: str, current_df: pd.DataFrame, recent_df: pd
     c1.metric("Current (≤15m)", len(curr_loc))
     c2.metric("Recent (≤24h, not current)", len(rec_loc))
 
+    # Current list (no timestamps)
     if len(curr_loc):
-        st.markdown("**Current Location**")
+        st.markdown("**Current Location (local MT time)**")
         st.write("\n".join(f"• {row['Name']}" for _, row in curr_loc.sort_values("Name").iterrows()))
     else:
         st.caption("No aircraft currently in window.")
 
+    # Recent list (with MT timestamps)
     if len(rec_loc):
-        st.markdown("**Seen in Last 24h**")
-        table = rec_loc[["Name", "Last Seen UTC"]].sort_values("Last Seen UTC", ascending=False)
+        st.markdown("**Seen in Last 24h (MT)**")
+        table = rec_loc[["Name", "Last Seen (MT)"]].copy()
+        table["Last Seen (MT)"] = table["Last Seen (MT)"].dt.strftime("%Y-%m-%d %H:%M %Z")
+        table = table.sort_values("Last Seen (MT)", ascending=False)
         st.dataframe(table, use_container_width=True)
     else:
         st.caption("No recent aircraft outside the current window.")
@@ -137,9 +156,14 @@ df = parse_df(df)
 if df.empty:
     st.stop()
 
-current_df, recent_df, now_utc = split_status(df)
+current_df, recent_df, now_mt = split_status(df)
+now_utc = now_mt.astimezone(timezone.utc)
 
-st.caption(f"Last refresh (UTC): **{now_utc.strftime('%Y-%m-%d %H:%M:%S')}**")
+st.caption(
+    f"Last refresh — Local (MT): **{now_mt.strftime('%Y-%m-%d %H:%M:%S %Z')}**  |  "
+    f"UTC: **{now_utc.strftime('%Y-%m-%d %H:%M:%S %Z')}**"
+)
+st.info("Note: Source timestamps are **local Mountain Time**; the original CSV header was mislabeled as UTC.")
 st.divider()
 
 # McCall & Palmer first
