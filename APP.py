@@ -126,5 +126,5 @@ st.caption(f"Last refresh (MT): **{now_mt.strftime('%Y-%m-%d %H:%M:%S %Z')}**")
 st.divider()
 
 # Render McCall & Palmer
-for site in ["McCall", "Palmer Hangar"]:
+for site in ["McCall Hangar", "Palmer Hangar"]:
     render_hangar(site, current_df)
