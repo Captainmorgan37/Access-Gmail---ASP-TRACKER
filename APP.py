@@ -81,6 +81,13 @@ def parse_df(df: pd.DataFrame):
 
     df["Last Seen (MT)"] = df["Last Seen (MT)"].apply(parse_local)
     df["Last Location"] = df["Last Location"].astype(str).str.strip()
+
+    # Extract only the tail registration (first token of the Name column)
+    if "Name" in df.columns:
+        df["Tail"] = df["Name"].apply(lambda x: str(x).split()[0])
+    else:
+        df["Tail"] = ""
+
     return df
 
 
@@ -99,7 +106,7 @@ def render_hangar(name: str, df: pd.DataFrame):
     else:
         cols = st.columns(len(loc_df))
         for col, (_, row) in zip(cols, loc_df.iterrows()):
-            col.success(f"🛩️ {row['Name']}", icon="✅")
+            col.success(f"🛩️ {row['Tail']}", icon="✅")
 
 
 # ----------------------------
@@ -119,5 +126,5 @@ st.caption(f"Last refresh (MT): **{now_mt.strftime('%Y-%m-%d %H:%M:%S %Z')}**")
 st.divider()
 
 # Render McCall & Palmer
-for site in ["McCall Hangar", "Palmer Hangar"]:
+for site in ["McCall", "Palmer Hangar"]:
     render_hangar(site, current_df)
