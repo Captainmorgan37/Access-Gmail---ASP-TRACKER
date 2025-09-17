@@ -17,7 +17,7 @@ mail.select("inbox")
 
 # ---------- SEARCH ----------
 # Look for the most recent email from WestCoastGPS
-status, messages = mail.search(None, '(FROM "noreply@westcoastgps.com")')
+status, messages = mail.search(None, '(FROM "no-reply@telematics.guru")')
 
 if status == "OK":
     latest_email_id = messages[0].split()[-1]  # grab the newest one
