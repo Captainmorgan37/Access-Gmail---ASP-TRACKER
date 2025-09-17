@@ -5,7 +5,7 @@ import os
 # ---------- CONFIG ----------
 IMAP_SERVER = "imap.gmail.com"
 EMAIL_ACCOUNT = "airsprint.gpsfeed@gmail.com"
-EMAIL_PASSWORD = "your_app_password_here"   # replace with App Password, not your normal login!
+EMAIL_PASSWORD = "bhzz onml blgt hlud"
 SAVE_FOLDER = "./csv_reports"
 
 os.makedirs(SAVE_FOLDER, exist_ok=True)
