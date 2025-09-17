@@ -153,4 +153,47 @@ def render_location_block(location: str, current_df: pd.DataFrame, recent_df: pd
             "\n".join(f"• {row['Name']}" for _, row in curr_loc.sort_values("Name").iterrows())
         )
     else:
-        st.caption("No
+        st.caption("No aircraft currently in window.")
+
+    # Show “Seen in Last 24h” with timestamps
+    if len(rec_loc):
+        st.markdown("**Seen in Last 24h**")
+        if show_tables:
+            table = rec_loc[["Name", "Last Seen UTC"]].sort_values("Last Seen UTC", ascending=False)
+            st.dataframe(table, use_container_width=True)
+        else:
+            st.write(
+                "\n".join(
+                    f"• {row['Name']} — {row['Last Seen UTC'].strftime('%Y-%m-%d %H:%M UTC')}"
+                    for _, row in rec_loc.sort_values("Last Seen UTC", ascending=False).iterrows()
+                )
+            )
+    else:
+        st.caption("No recent aircraft outside the current window.")
+
+
+# =========================
+# Load & Display
+# =========================
+df = load_csv(DATA_PATH)
+
+if df.empty:
+    st.stop()
+
+current_df, recent_df, now_utc = status_split(df, current_mins, recent_hours)
+
+st.caption(f"Last refresh (UTC): **{now_utc.strftime('%Y-%m-%d %H:%M:%S')}**")
+st.divider()
+
+# Show McCall & Palmer sections (order fixed for ops scanning)
+for site in ["McCall", "Palmer Hangar", "Palmer"]:
+    if site in set(df["Last Location"]):
+        render_location_block(site, current_df, recent_df, show_tables)
+
+# Also show any unexpected locations (future-proofing)
+other_sites = sorted(set(df["Last Location"]) - {"McCall", "Palmer Hangar", "Palmer"})
+if other_sites:
+    st.divider()
+    st.subheader("Other Locations")
+    for site in other_sites:
+        render_location_block(site, current_df, recent_df, show_tables)
